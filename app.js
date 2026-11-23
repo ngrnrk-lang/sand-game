@@ -4,9 +4,16 @@ const sq=(x,y)=>'abcdef'[x]+(y+1);
 const inside=(x,y)=>x>=0&&x<6&&y>=0&&y<6;
 const at=(s,x,y)=>s.board[y][x];
 const copy=s=>JSON.parse(JSON.stringify(s));
-const initial=()=>({board:Array.from({length:6},(_,y)=>Array.from({length:6},()=>y===0?'P':y===5?'C':null)),last:{P:{},C:{}},turn:'P',log:[],done:false,winner:null});
+const initial=(first='P')=>({first,board:Array.from({length:6},(_,y)=>Array.from({length:6},()=>y===0?'P':y===5?'C':null)),last:{P:{},C:{}},turn:first,log:[],done:false,winner:null});
 let s;try{s=JSON.parse(localStorage.getItem(key))||initial();if(!s.board||!s.last)throw 0}catch{s=initial()}
-let selected=null,undoStack=[],busy=false;
+// The next starter is stored separately so refreshing the page never switches sides.
+const FIRST_MODE_KEY='sand-first-mode-v1',NEXT_FIRST_KEY='sand-next-first-v1';
+let firstMode=localStorage.getItem(FIRST_MODE_KEY)||'alternate';
+if(!['alternate','P','C'].includes(firstMode))firstMode='alternate';
+let nextFirst=localStorage.getItem(NEXT_FIRST_KEY)||'C';
+if(!['P','C'].includes(nextFirst))nextFirst='C';
+if(!s.first)s.first=s.log?.[0]?.startsWith('AI：')?'C':'P';
+let selected=null,undoStack=[],busy=false,gameEpoch=0;
 const directions=[[1,0],[-1,0],[0,1],[0,-1]];
 if(s.done&&s.winner==='draw'&&s.board.flat().filter(x=>x==='P').length>2&&s.board.flat().filter(x=>x==='C').length>2&&legal(s,s.turn).length===0){s.winner=s.turn==='P'?'C':'P'}
 function legal(s,side){let out=[];for(let y=0;y<6;y++)for(let x=0;x<6;x++){if(at(s,x,y)!==side)continue;let origin=sq(x,y),blocked=s.last[side][origin];for(let [dx,dy] of directions){for(let k=1;inside(x+dx*k,y+dy*k)&&!at(s,x+dx*k,y+dy*k);k++){let xx=x+dx*k,yy=y+dy*k;if(sq(xx,yy)!==blocked)out.push({x,y,xx,yy});}}}return out}
@@ -17,6 +24,37 @@ function apply(state,m,side){let t=copy(state),from=sq(m.x,m.y),to=sq(m.xx,m.yy)
 const nextMoves=legal(t,t.turn).length;if(p<=2||c<=2||nextMoves===0){t.done=true;if(nextMoves===0){t.winner=side}else{let takenP=6-c,takenC=6-p;t.winner=takenP>takenC?'P':takenC>takenP?'C':'draw';}}return t}
 function chooseAI(state){let moves=legal(state,'C');if(!moves.length)return null;let best=-Infinity,choices=[];for(let m of moves){let t=apply(state,m,'C');let gained=state.board.flat().filter(v=>v==='P').length-t.board.flat().filter(v=>v==='P').length;let response=legal(t,'P');let risk=0;for(let r of response){let next=apply(t,r,'P');let lost=t.board.flat().filter(v=>v==='C').length-next.board.flat().filter(v=>v==='C').length;risk=Math.max(risk,lost)}let score=gained*100-risk*75+(2.5-Math.abs(m.xx-2.5))+(2.5-Math.abs(m.yy-2.5))*.5+Math.random()*.4;if(score>best+.01){best=score;choices=[m]}else if(Math.abs(score-best)<.01)choices.push(m)}return choices[Math.floor(Math.random()*choices.length)]}
 function save(){localStorage.setItem(key,JSON.stringify(s))}
-function render(){let b=document.getElementById('board');b.innerHTML='';let allowed=selected?legal(s,'P').filter(m=>m.x===selected.x&&m.y===selected.y):[];let last=s.lastMove;for(let y=5;y>=0;y--)for(let x=0;x<6;x++){let pos=sq(x,y),btn=document.createElement('button');btn.className='cell'+((x+y)%2?' dark':'')+(selected&&selected.x===x&&selected.y===y?' selected':'')+(allowed.some(m=>m.xx===x&&m.yy===y)?' legal':'')+(last&&last.from===pos?' move-from':'')+(last&&last.to===pos?' move-to':'')+(last&&last.removed.includes(pos)?' captured':'');btn.setAttribute('aria-label',pos+(at(s,x,y)?' '+at(s,x,y):' 空き')+(last&&last.removed.includes(pos)?' 捕獲された位置':''));let v=at(s,x,y);if(v){let p=document.createElement('span');p.className='piece '+v;btn.appendChild(p)}btn.onclick=()=>tap(x,y);b.appendChild(btn)}let p=s.board.flat().filter(v=>v==='P').length,c=s.board.flat().filter(v=>v==='C').length;document.getElementById('pCount').textContent=p+'枚';document.getElementById('cCount').textContent=c+'枚';document.getElementById('status').textContent=s.done?(s.winner==='P'?'あなたの勝ち！ 🎉':s.winner==='C'?'チャッピーAIの勝ち！':'引き分け'):(busy||s.turn==='C'?'チャッピーAIが考え中…':selected?'緑の印がある移動先をタップしてね。':'青い駒をタップしてね。');let info=document.getElementById('lastMove');info.textContent=last?`${last.side==='C'?'🔴 AI':'🔵 あなた'}：${last.from} → ${last.to}${last.removed.length?' ／ '+last.removed.length+'枚捕獲（'+last.removed.join('・')+'）':''}`:'直前の一手はここに表示されます。';document.getElementById('history').innerHTML=s.log.map((t,i)=>`<div>${i+1}. ${t}</div>`).join('')||'まだ着手はありません。';document.getElementById('undo').disabled=!undoStack.length||busy;save()}
-function tap(x,y){if(s.done||busy||s.turn!=='P')return;if(at(s,x,y)==='P'){selected={x,y};render();return}if(!selected)return;let m=legal(s,'P').find(m=>m.x===selected.x&&m.y===selected.y&&m.xx===x&&m.yy===y);if(!m){selected=null;render();return}undoStack.push(copy(s));s=apply(s,m,'P');selected=null;render();if(!s.done){busy=true;render();setTimeout(()=>{let move=chooseAI(s);if(move)s=apply(s,move,'C');busy=false;render()},350)}}
-document.getElementById('new').onclick=()=>{if(!confirm('対局を最初から始めますか？'))return;s=initial();selected=null;undoStack=[];busy=false;render()};document.getElementById('undo').onclick=()=>{if(!undoStack.length||busy)return;s=undoStack.pop();selected=null;render()};if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});render();
+function render(){let b=document.getElementById('board');b.innerHTML='';let allowed=selected?legal(s,'P').filter(m=>m.x===selected.x&&m.y===selected.y):[];let last=s.lastMove;for(let y=5;y>=0;y--)for(let x=0;x<6;x++){let pos=sq(x,y),btn=document.createElement('button');btn.className='cell'+((x+y)%2?' dark':'')+(selected&&selected.x===x&&selected.y===y?' selected':'')+(allowed.some(m=>m.xx===x&&m.yy===y)?' legal':'')+(last&&last.from===pos?' move-from':'')+(last&&last.to===pos?' move-to':'')+(last&&last.removed.includes(pos)?' captured':'');btn.setAttribute('aria-label',pos+(at(s,x,y)?' '+at(s,x,y):' 空き')+(last&&last.removed.includes(pos)?' 捕獲された位置':''));let v=at(s,x,y);if(v){let p=document.createElement('span');p.className='piece '+v;btn.appendChild(p)}btn.onclick=()=>tap(x,y);b.appendChild(btn)}let p=s.board.flat().filter(v=>v==='P').length,c=s.board.flat().filter(v=>v==='C').length;document.getElementById('pCount').textContent=p+'枚';document.getElementById('cCount').textContent=c+'枚';document.getElementById('status').textContent=s.done?(s.winner==='P'?'あなたの勝ち！ 🎉':s.winner==='C'?'チャッピーAIの勝ち！':'引き分け'):(busy||s.turn==='C'?'チャッピーAIが考え中…':selected?'緑の印がある移動先をタップしてね。':'青い駒をタップしてね。');let info=document.getElementById('lastMove');info.textContent=last?`${last.side==='C'?'🔴 AI':'🔵 あなた'}：${last.from} → ${last.to}${last.removed.length?' ／ '+last.removed.length+'枚捕獲（'+last.removed.join('・')+'）':''}`:'直前の一手はここに表示されます。';document.getElementById('history').innerHTML=s.log.map((t,i)=>`<div>${i+1}. ${t}</div>`).join('')||'まだ着手はありません。';document.getElementById('undo').disabled=!undoStack.length||busy;
+const starting=firstMode==='alternate'?nextFirst:firstMode;
+document.getElementById('firstInfo').textContent=`この対局の先手：${s.first==='P'?'あなた':'AI'} ／ 次の対局の先手：${starting==='P'?'あなた':'AI'}`;
+save()}
+function tap(x,y){if(s.done||busy||s.turn!=='P')return;if(at(s,x,y)==='P'){selected={x,y};render();return}if(!selected)return;let m=legal(s,'P').find(m=>m.x===selected.x&&m.y===selected.y&&m.xx===x&&m.yy===y);if(!m){selected=null;render();return}undoStack.push(copy(s));s=apply(s,m,'P');selected=null;render();if(!s.done)runAI()}
+function runAI(){
+  if(s.done||s.turn!=='C'||busy)return;
+  const epoch=gameEpoch;
+  busy=true;render();
+  setTimeout(()=>{
+    if(epoch!==gameEpoch)return;
+    if(s.done||s.turn!=='C'){busy=false;render();return}
+    const move=chooseAI(s);
+    if(move)s=apply(s,move,'C');
+    else{s.done=true;s.winner='P'}
+    busy=false;render();
+  },350);
+}
+const firstModeSelect=document.getElementById('firstMode');
+firstModeSelect.value=firstMode;
+firstModeSelect.onchange=()=>{
+  firstMode=firstModeSelect.value;
+  localStorage.setItem(FIRST_MODE_KEY,firstMode);
+  render();
+};
+document.getElementById('new').onclick=()=>{
+  const starter=firstMode==='alternate'?nextFirst:firstMode;
+  if(!confirm(`次の対局は${starter==='P'?'あなた':'チャッピーAI'}が先手です。新しい対局を始めますか？`))return;
+  gameEpoch++;
+  s=initial(starter);selected=null;undoStack=[];busy=false;
+  nextFirst=starter==='P'?'C':'P';
+  localStorage.setItem(NEXT_FIRST_KEY,nextFirst);
+  render();runAI();
+};document.getElementById('undo').onclick=()=>{if(!undoStack.length||busy)return;s=undoStack.pop();selected=null;render()};if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});render();runAI();
